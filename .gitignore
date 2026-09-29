@@ -1,0 +1,20 @@
+# Local credentials
+.env
+.env.*
+
+# Database scripts and local database assets
+db/
+
+# Dependencies and generated files
+node_modules/
+src/docs/swagger-output.json
+drizzle/
+dist/
+coverage/
+
+# Local and editor files
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/
