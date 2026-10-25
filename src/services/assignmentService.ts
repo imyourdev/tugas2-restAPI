@@ -1,3 +1,4 @@
+
 import {
   AssignmentRepository,
   type AuditLogInput,
@@ -8,7 +9,9 @@ import {
 } from '../repositories/assignmentRepository.ts';
 
 export class AssignmentService {
-  constructor(private repository: AssignmentRepository = new AssignmentRepository()) {}
+  constructor(
+    private repository: AssignmentRepository = new AssignmentRepository()
+  ) {}
 
   getUsers() {
     return this.repository.findUsers();
@@ -36,7 +39,10 @@ export class AssignmentService {
     return item;
   }
 
-  async updateMenuItem(id: number, input: Partial<MenuItemInput>) {
+  async updateMenuItem(
+    id: number,
+    input: Partial<MenuItemInput>
+  ) {
     const item = await this.repository.updateMenuItem(id, input);
     if (!item) throw new Error('MENU_ITEM_NOT_FOUND');
     return item;
@@ -70,28 +76,68 @@ export class AssignmentService {
     return like;
   }
 
-  async deleteLike(id: number) {
-    const like = await this.repository.deleteLike(id);
-    if (!like) throw new Error('LIKE_NOT_FOUND');
-    return like;
+  async deleteLike(
+    id: number,
+    userId: number,
+    role: 'admin' | 'owner' | 'customer'
+  ) {
+    const existing = await this.repository.findLikeById(id);
+
+    if (!existing) {
+      throw new Error('LIKE_NOT_FOUND');
+    }
+
+    const isAdmin = role === 'admin';
+
+    if (!isAdmin && existing.userId !== userId) {
+      throw new Error('LIKE_FORBIDDEN');
+    }
+
+    const deleted = await this.repository.deleteLike(
+      id,
+      userId,
+      isAdmin
+    );
+
+    if (!deleted) {
+      throw new Error('LIKE_NOT_FOUND');
+    }
+
+    return deleted;
   }
 
   getFlags(status?: string) {
     return this.repository.findFlags(status);
   }
 
-  async updateFlagStatus(id: number, status: 'pending' | 'resolved' | 'dismissed') {
-    const flag = await this.repository.updateFlagStatus(id, status);
+  async updateFlagStatus(
+    id: number,
+    status: 'pending' | 'resolved' | 'dismissed'
+  ) {
+    const flag = await this.repository.updateFlagStatus(
+      id,
+      status
+    );
+
     if (!flag) throw new Error('FLAG_NOT_FOUND');
     return flag;
   }
 
-  getAuditLogs(userId?: number, targetTable?: string) {
-    return this.repository.findAuditLogs(userId, targetTable);
+  getAuditLogs(
+    userId?: number,
+    targetTable?: string
+  ) {
+    return this.repository.findAuditLogs(
+      userId,
+      targetTable
+    );
   }
 
   async createAuditLog(input: AuditLogInput) {
-    const auditLog = await this.repository.createAuditLog(input);
+    const auditLog = await this.repository.createAuditLog(
+      input
+    );
+
     if (!auditLog) throw new Error('AUDIT_LOG_CREATE_FAILED');
     return auditLog;
   }

@@ -1,56 +1,36 @@
+
 import type { Request, Response } from 'express';
 import { StallService } from '../services/stallService.ts';
-import type { CreateStallInput } from '../repositories/stallRepository.ts';
+import type { AuthUser } from '../middlewares/authMiddleware.ts';
+import type { z } from 'zod';
 
-type JsonObject = Record<string, unknown>;
+import {
+  getStallsQuerySchema,
+  createStallSchema,
+  updateStallSchema,
+  stallIdParamSchema,
+} from '../validators/stallValidator.ts';
 
+type GetStallsQuery = z.infer<typeof getStallsQuerySchema>;
+type CreateStallBody = z.infer<typeof createStallSchema>;
+type UpdateStallBody = z.infer<typeof updateStallSchema>;
+type StallParams = z.infer<typeof stallIdParamSchema>;
+
+// Validasi ID untuk endpoint lama GET /stalls/:id/menus
 function parseId(value: string | string[]): number {
   if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) {
-    throw new Error('BAD_REQUEST: id harus berupa bilangan bulat positif');
+    throw new Error(
+      'BAD_REQUEST: id harus berupa bilangan bulat positif'
+    );
   }
-  return Number(value);
-}
 
-function parseQueryInteger(value: unknown, key: string, fallback: number): number {
-  if (value === undefined) return fallback;
-  if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) {
-    throw new Error(`BAD_REQUEST: ${key} harus berupa bilangan bulat positif`);
-  }
-  return Number(value);
-}
+  const id = Number(value);
 
-function parseStallInput(value: unknown): CreateStallInput;
-function parseStallInput(value: unknown, partial: true): Partial<CreateStallInput>;
-function parseStallInput(value: unknown, partial = false): Partial<CreateStallInput> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('BAD_REQUEST: body harus berupa objek JSON');
+  if (!Number.isSafeInteger(id)) {
+    throw new Error('BAD_REQUEST: id tidak valid');
   }
-  const body = value as JsonObject;
-  const input: Partial<CreateStallInput> = {};
-  if (!partial || body.ownerId !== undefined) {
-    if (typeof body.ownerId !== 'number' || !Number.isInteger(body.ownerId) || body.ownerId < 1) {
-      throw new Error('BAD_REQUEST: ownerId harus berupa bilangan bulat positif');
-    }
-    input.ownerId = body.ownerId;
-  }
-  if (!partial || body.name !== undefined) {
-    if (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 100) {
-      throw new Error('BAD_REQUEST: name wajib diisi (maksimal 100 karakter)');
-    }
-    input.name = body.name.trim();
-  }
-  for (const [key, maxLength] of [['category', 50], ['location', 100], ['description', Number.MAX_SAFE_INTEGER]] as const) {
-    const field = body[key];
-    if (field === undefined) continue;
-    if (field !== null && (typeof field !== 'string' || field.length > maxLength)) {
-      throw new Error(`BAD_REQUEST: ${key} tidak valid`);
-    }
-    input[key] = field;
-  }
-  if (partial && Object.keys(input).length === 0) {
-    throw new Error('BAD_REQUEST: minimal satu field harus diubah');
-  }
-  return input;
+
+  return id;
 }
 
 export class StallController {
@@ -60,89 +40,230 @@ export class StallController {
     this.stallService = stallService;
   }
 
-  private handleError(res: Response, error: unknown): Response {
-    if (error instanceof Error && error.message.startsWith('BAD_REQUEST:')) {
-      return res.status(400).json({ status: 'fail', message: error.message.slice('BAD_REQUEST: '.length) });
+  // Penanganan error sementara
+  private handleError(
+    res: Response,
+    error: unknown
+  ): Response {
+    if (
+      error instanceof Error &&
+      error.message.startsWith('BAD_REQUEST:')
+    ) {
+      return res.status(400).json({
+        status: 'fail',
+        message: error.message.slice('BAD_REQUEST: '.length),
+      });
     }
-    if (error instanceof Error && error.message === 'STALL_NOT_FOUND') {
-      return res.status(404).json({ status: 'fail', message: 'Data warung tidak ditemukan' });
+
+    if (
+      error instanceof Error &&
+      error.message === 'STALL_NOT_FOUND'
+    ) {
+      return res.status(404).json({
+        status: 'fail',
+        message: 'Data warung tidak ditemukan',
+      });
     }
+
     console.error('Stall API error:', error);
+
     return res.status(500).json({
       status: 'error',
       message: 'Terjadi kesalahan pada server',
     });
   }
 
-  getStalls = async (req: Request, res: Response): Promise<Response> => {
+  // GET /stalls - PUBLIC
+  getStalls = async (
+    _req: Request,
+    res: Response
+  ): Promise<Response> => {
     try {
-      const page = parseQueryInteger(req.query.page, 'page', 1);
-      const limit = parseQueryInteger(req.query.limit, 'limit', 10);
-      const search = typeof req.query.search === 'string' ? req.query.search : undefined;
-      const category = typeof req.query.category === 'string' ? req.query.category : undefined;
-      if (req.query.search !== undefined && search === undefined) {
-        throw new Error('BAD_REQUEST: search harus berupa teks');
-      }
-      if (req.query.category !== undefined && category === undefined) {
-        throw new Error('BAD_REQUEST: category harus berupa teks');
+      const query = res.locals.validated?.query as
+        | GetStallsQuery
+        | undefined;
+
+      if (!query) {
+        return res.status(500).json({
+          status: 'error',
+          message: 'Validasi query belum dijalankan',
+        });
       }
 
-      const { data, total } = await this.stallService.getAllStalls({
-        search,
-        category,
-        page,
-        limit,
+      const { search, category, page, limit } = query;
+
+      const { data, total } =
+        await this.stallService.getAllStalls({
+          search,
+          category,
+          page,
+          limit,
+        });
+
+      return res.status(200).json({
+        status: 'success',
+        meta: {
+          page,
+          limit,
+          total,
+        },
+        data,
+      });
+    } catch (error) {
+      return this.handleError(res, error);
+    }
+  };
+
+  // GET /stalls/:id - PUBLIC
+  getStallById = async (
+    _req: Request,
+    res: Response
+  ): Promise<Response> => {
+    try {
+      const params = res.locals.validated?.params as
+        | StallParams
+        | undefined;
+
+      if (!params) {
+        return res.status(500).json({
+          status: 'error',
+          message: 'Validasi parameter belum dijalankan',
+        });
+      }
+
+      const stall = await this.stallService.getStallById(
+        params.id
+      );
+
+      return res.status(200).json({
+        status: 'success',
+        data: stall,
+      });
+    } catch (error) {
+      return this.handleError(res, error);
+    }
+  };
+
+  // GET /stalls/:id/menus - PUBLIC (endpoint Tugas 2)
+  getStallMenus = async (
+    req: Request,
+    res: Response
+  ): Promise<Response> => {
+    try {
+      const menus = await this.stallService.getStallMenus(
+        parseId(req.params.id)
+      );
+
+      return res.status(200).json({
+        status: 'success',
+        data: menus,
+      });
+    } catch (error) {
+      return this.handleError(res, error);
+    }
+  };
+
+  // POST /stalls - ADMIN & OWNER
+  createStall = async (
+    _req: Request,
+    res: Response
+  ): Promise<Response> => {
+    try {
+      const user = res.locals.user as AuthUser | undefined;
+
+      if (!user) {
+        return res.status(401).json({
+          status: 'fail',
+          message: 'Autentikasi diperlukan',
+        });
+      }
+
+      const input = res.locals.validated?.body as
+        | CreateStallBody
+        | undefined;
+
+      if (!input) {
+        return res.status(500).json({
+          status: 'error',
+          message: 'Validasi body belum dijalankan',
+        });
+      }
+
+      // ownerId diambil dari identitas pengguna pada JWT
+      const stall = await this.stallService.createStall({
+        ...input,
+        ownerId: user.id,
       });
 
-      return res.status(200).json({ status: 'success', meta: { page, limit, total }, data });
+      return res.status(201).json({
+        status: 'success',
+        data: stall,
+      });
     } catch (error) {
       return this.handleError(res, error);
     }
   };
 
-  getStallById = async (req: Request, res: Response): Promise<Response> => {
+  // PUT /stalls/:id - ADMIN & OWNER WARUNG
+  updateStall = async (
+    _req: Request,
+    res: Response
+  ): Promise<Response> => {
     try {
-      const stall = await this.stallService.getStallById(parseId(req.params.id));
-      return res.status(200).json({ status: 'success', data: stall });
-    } catch (error) {
-      return this.handleError(res, error);
-    }
-  };
+      const params = res.locals.validated?.params as
+        | StallParams
+        | undefined;
 
-  getStallMenus = async (req: Request, res: Response): Promise<Response> => {
-    try {
-      const menus = await this.stallService.getStallMenus(parseId(req.params.id));
-      return res.status(200).json({ status: 'success', data: menus });
-    } catch (error) {
-      return this.handleError(res, error);
-    }
-  };
+      const input = res.locals.validated?.body as
+        | UpdateStallBody
+        | undefined;
 
-  createStall = async (req: Request, res: Response): Promise<Response> => {
-    try {
-      const stall = await this.stallService.createStall(parseStallInput(req.body));
-      return res.status(201).json({ status: 'success', data: stall });
-    } catch (error) {
-      return this.handleError(res, error);
-    }
-  };
+      if (!params || !input) {
+        return res.status(500).json({
+          status: 'error',
+          message: 'Validasi belum dijalankan',
+        });
+      }
 
-  updateStall = async (req: Request, res: Response): Promise<Response> => {
-    try {
       const stall = await this.stallService.updateStall(
-        parseId(req.params.id),
-        parseStallInput(req.body, true),
+        params.id,
+        input
       );
-      return res.status(200).json({ status: 'success', data: stall });
+
+      return res.status(200).json({
+        status: 'success',
+        data: stall,
+      });
     } catch (error) {
       return this.handleError(res, error);
     }
   };
 
-  deleteStall = async (req: Request, res: Response): Promise<Response> => {
+  // DELETE /stalls/:id - ADMIN ONLY
+  deleteStall = async (
+    _req: Request,
+    res: Response
+  ): Promise<Response> => {
     try {
-      const stall = await this.stallService.deleteStall(parseId(req.params.id));
-      return res.status(200).json({ status: 'success', data: stall });
+      const params = res.locals.validated?.params as
+        | StallParams
+        | undefined;
+
+      if (!params) {
+        return res.status(500).json({
+          status: 'error',
+          message: 'Validasi parameter belum dijalankan',
+        });
+      }
+
+      const stall = await this.stallService.deleteStall(
+        params.id
+      );
+
+      return res.status(200).json({
+        status: 'success',
+        data: stall,
+      });
     } catch (error) {
       return this.handleError(res, error);
     }
