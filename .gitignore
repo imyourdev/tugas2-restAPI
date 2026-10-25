@@ -18,3 +18,7 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 .vscode/
+
+# Folder pribadi
+/submit tugas/
+/tugas 3/
